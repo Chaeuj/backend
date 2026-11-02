@@ -83,4 +83,23 @@ public class PhoneVerification extends BaseCreatedEntity {
         this.targetOwner = targetOwner;
         this.requestIp = requestIp;
     }
+
+    public boolean isVerified() {
+        return verifiedAt != null;
+    }
+
+    public boolean isExpired(Instant now) {
+        return !now.isBefore(expiresAt);
+    }
+
+    // 틀린 입력 1회 기록, 남은 횟수 반환
+    public int recordFailedAttempt(int maxAttempts) {
+        attemptCount++;
+        return Math.max(0, maxAttempts - attemptCount);
+    }
+
+    // 성공 - 다시 쓸 수 없음
+    public void markVerified(Instant now) {
+        this.verifiedAt = now;
+    }
 }
