@@ -54,4 +54,11 @@ public class OwnerWorkType {
         this.workCategory = workCategory;
         this.durationMinutes = durationMinutes;
     }
+
+    // 제공을 끄면 자동 예약 허용도 같이 꺼짐 (ck_owner_work_type_auto_booking)
+    public void update(boolean isActive, int durationMinutes, boolean autoBookingAllowed) {
+        this.isActive = isActive;
+        this.durationMinutes = durationMinutes;
+        this.autoBookingAllowed = isActive && autoBookingAllowed;
+    }
 }
