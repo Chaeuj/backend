@@ -300,6 +300,35 @@ class AiAnalysisFlowTest {
     }
 
     @Test
+    @DisplayName("분석 중 사장님이 직접 응대를 시작하면(API) 결과는 STALE, 그 뒤 고객 메시지에도 AI가 답하지 않음")
+    void takeoverApiDuringCall() throws Exception {
+        Session session = startInquiry();
+        send(session, "물이 새요");
+        String ownerToken = accounts.ownerToken(ownerId);
+        long seqBefore = ((Number) inquiry(session).get("ai_input_seq")).longValue();
+        ai.then(request -> {
+            try {
+                postAs(ownerToken, "/api/v1/owner/inquiries/" + session.inquiryId() + "/takeover", "")
+                        .andExpect(status().isOk());
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return ok(answer("CHECK_SCHEDULE", "DONE").build(request));
+        });
+
+        analysisService.analyze(session.inquiryId());
+        send(session, "언제 와요?");
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(ai.requests()).hasSize(1);
+        assertThat(decisionStatuses(session)).containsExactly("STALE");
+        assertThat(aiMessages(session)).isZero();
+        // 직접 응대 시작 +1, 고객 메시지 +1
+        assertThat(inquiry(session)).containsEntry("status", "COLLECTING")
+                .containsEntry("ai_input_seq", seqBefore + 2);
+    }
+
+    @Test
     @DisplayName("시간 초과 뒤 두 번째 시도에서 성공 - 같은 요청 ID, 실패 기록엔 판단값 없이")
     void retryAfterTimeout() throws Exception {
         Session session = startInquiry();
@@ -447,6 +476,22 @@ class AiAnalysisFlowTest {
                 .containsExactly("model=NCB-500/OWNER", "symptom=누수/CUSTOMER");
         assertThat(inquiry(session)).containsEntry("model", "NCB-500")
                 .containsEntry("work_type_id", null);
+    }
+
+    @Test
+    @DisplayName("사장님 값을 고객이 다르게 고친 충돌은 AI가 풀지 못함 - 사장님이 정할 때까지 그대로")
+    void customerConflictStays() throws Exception {
+        Session session = startInquiry();
+        jdbc.update("INSERT INTO inquiry_field (inquiry_id, field_key, field_value, source, status, unconfirmed_reason) "
+                + "VALUES (?, 'manufacturer', '귀뚜라미', 'CUSTOMER', 'UNCONFIRMED', 'CONFLICT')", session.inquiryId());
+        long messageId = send(session, "경동나비엔이에요");
+        ai.then(reply(answer("ASK_MORE_INFO", "MISSING_FIELD").fact("manufacturer", "경동나비엔", messageId)));
+
+        analysisService.analyze(session.inquiryId());
+
+        assertThat(jdbc.queryForList("SELECT field_value || '/' || status || '/' || unconfirmed_reason "
+                + "FROM inquiry_field WHERE inquiry_id = ? AND field_key = 'manufacturer' AND is_current", String.class,
+                session.inquiryId())).containsExactly("귀뚜라미/UNCONFIRMED/CONFLICT");
     }
 
     @Test
