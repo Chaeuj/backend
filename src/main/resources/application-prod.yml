@@ -19,3 +19,5 @@ app:
     mode: ${AI_MODE:http}
     base-url: ${AI_BASE_URL}
     internal-key: ${AI_INTERNAL_KEY}
+  intake:
+    base-url: ${INTAKE_LINK_BASE_URL}

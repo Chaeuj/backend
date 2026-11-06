@@ -35,6 +35,8 @@ app:
   intake:
     # 고객이 동의하는 약관 버전 - 약관을 바꾸면 이 값만 올림, 이전 버전 동의로는 새 상담을 시작할 수 없음
     terms-version: ${INTAKE_TERMS_VERSION:2026-10-v1}
+    # 고객 접수 화면 주소 (로컬 기본값, 서버는 Parameter Store)
+    base-url: ${INTAKE_LINK_BASE_URL:http://localhost:3000}
   ai:
     # 고객 메시지가 오면 AI 서버에 문의 분석을 맡김 (명세 6장)
     enabled: ${AI_ENABLED:true}

@@ -173,4 +173,9 @@ public class Owner extends BaseTimeEntity {
     public boolean isServingCustomers() {
         return approvalStatus == ApprovalStatus.APPROVED && status == OwnerStatus.ACTIVE;
     }
+
+    // 접수 링크 발급·재발급 (O-04) - 토큰을 바꾸면 기존 링크는 폐기됨
+    public void changeLinkToken(String linkToken) {
+        this.linkToken = linkToken;
+    }
 }
