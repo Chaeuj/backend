@@ -16,8 +16,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -167,6 +169,33 @@ class HttpAiAnalyzeClientTest {
         assertThat(call.retryable()).isTrue();
         assertThat(call.errorCode()).isEqualTo("READ_TIMEOUT");
         assertThat(call.latencyMs()).isBetween(250, 1_900);
+    }
+
+    @Test
+    @DisplayName("응답 헤더 뒤 본문이 멈춰도 시도당 대기 시간에 끝남 - 작업 스레드가 묶이지 않음")
+    void stalledBody() throws Exception {
+        try (ServerSocket stall = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            Thread responder = Thread.ofVirtual().start(() -> {
+                try (Socket socket = stall.accept()) {
+                    socket.getInputStream().read(new byte[65_536]);
+                    OutputStream out = socket.getOutputStream();
+                    out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 5000\r\n\r\n"
+                            + "{\"success\":tr").getBytes(StandardCharsets.US_ASCII));
+                    out.flush();
+                    Thread.sleep(10_000);
+                } catch (IOException | InterruptedException e) {
+                    // 시험이 끝나면 멈춘 응답을 정리
+                }
+            });
+
+            AiCallResult call = client(baseUrl(stall.getLocalPort())).analyze(request(), Duration.ofMillis(500));
+
+            responder.interrupt();
+            assertThat(call.outcome()).isEqualTo(Outcome.TIMEOUT);
+            assertThat(call.retryable()).isTrue();
+            assertThat(call.errorCode()).isEqualTo("READ_TIMEOUT");
+            assertThat(call.latencyMs()).isBetween(450, 3_000);
+        }
     }
 
     @Test

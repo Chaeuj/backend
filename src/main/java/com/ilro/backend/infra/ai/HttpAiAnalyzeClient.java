@@ -10,7 +10,6 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
@@ -19,6 +18,10 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 // 실제 AI 서버(FastAPI) 호출 - 헤더 X-Internal-Key로 서로 확인 (명세 1.1·6.2)
 // 요청·응답 본문과 내부 키는 로그에 남기지 않음
@@ -48,31 +51,46 @@ public class HttpAiAnalyzeClient implements AiAnalyzeClient {
                 .build();
     }
 
+    // 시도당 대기 시간(timeout)은 응답 본문을 다 받을 때까지 - 요청의 timeout은 응답 헤더까지만 막으므로
+    // 헤더 뒤 본문이 멈춰도(프록시·네트워크 끊김) 작업 스레드가 묶이지 않게 전체를 이 시간만 기다리고 취소함
     @Override
     public AiCallResult analyze(AnalyzeRequest request, Duration timeout) {
         long started = System.nanoTime();
+        HttpRequest httpRequest = HttpRequest.newBuilder(analyzeUri)
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .header("X-Internal-Key", internalKey)
+                .POST(HttpRequest.BodyPublishers.ofString(jsonMapper.writeValueAsString(request),
+                        StandardCharsets.UTF_8))
+                .build();
+        CompletableFuture<HttpResponse<String>> pending =
+                httpClient.sendAsync(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         HttpResponse<String> response;
         try {
-            HttpRequest httpRequest = HttpRequest.newBuilder(analyzeUri)
-                    .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .header("X-Internal-Key", internalKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonMapper.writeValueAsString(request),
-                            StandardCharsets.UTF_8))
-                    .build();
-            response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        } catch (HttpConnectTimeoutException e) {
-            return AiCallResult.failure(Outcome.FAILED, true, null, "CONNECT_TIMEOUT", elapsedMs(started));
-        } catch (HttpTimeoutException e) {
+            response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            pending.cancel(true);
             return AiCallResult.failure(Outcome.TIMEOUT, true, null, "READ_TIMEOUT", elapsedMs(started));
-        } catch (IOException e) {
-            log.warn("AI 서버 연결 실패 inquiryId={}: {}", request.inquiryId(), e.getClass().getSimpleName());
-            return AiCallResult.failure(Outcome.FAILED, true, null, "CONNECTION_FAILED", elapsedMs(started));
+        } catch (ExecutionException e) {
+            return failure(request, e.getCause(), started);
         } catch (InterruptedException e) {
+            pending.cancel(true);
             Thread.currentThread().interrupt();
             return AiCallResult.failure(Outcome.FAILED, false, null, "INTERRUPTED", elapsedMs(started));
         }
         return toResult(response.statusCode(), response.body(), elapsedMs(started));
+    }
+
+    private static AiCallResult failure(AnalyzeRequest request, Throwable cause, long started) {
+        if (cause instanceof HttpConnectTimeoutException) {
+            return AiCallResult.failure(Outcome.FAILED, true, null, "CONNECT_TIMEOUT", elapsedMs(started));
+        }
+        if (cause instanceof HttpTimeoutException) {
+            return AiCallResult.failure(Outcome.TIMEOUT, true, null, "READ_TIMEOUT", elapsedMs(started));
+        }
+        String type = cause == null ? "unknown" : cause.getClass().getSimpleName();
+        log.warn("AI 서버 연결 실패 inquiryId={}: {}", request.inquiryId(), type);
+        return AiCallResult.failure(Outcome.FAILED, true, null, "CONNECTION_FAILED", elapsedMs(started));
     }
 
     // 공통 응답 {success, code, message, result} - 실패는 AI 서버 오류 코드(명세 3.8)로 나눔

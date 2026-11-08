@@ -8,6 +8,7 @@ import com.ilro.backend.infra.ai.AnalyzeResult.Fact;
 import com.ilro.backend.infra.ai.AnalyzeResult.NextAction;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -20,7 +21,9 @@ import java.util.Optional;
 // (10/26 "명세 기반 가짜 응답으로 병렬 개발한 뒤 11/3~11/9 연결")
 // 증상이 아직 없으면 마지막 고객 메시지를 증상으로 받아 적고, 증상이 있으면 방문 시간 고르기로 넘김
 // 실패 흉내: 마지막 고객 메시지에 #fake-timeout · #fake-invalid · #fake-error · #fake-escalate · #fake-safety
+// 운영(prod)에선 만들지 않음 - 설정을 fake로 바꿔도 AI 클라이언트가 없어 서버가 뜨지 않음 (실제 고객에게 가짜 답 금지)
 @Component
+@Profile("!prod")
 @RequiredArgsConstructor
 @ConditionalOnProperty(name = "app.ai.mode", havingValue = "fake", matchIfMissing = true)
 public class FakeAiAnalyzeClient implements AiAnalyzeClient {
