@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -82,8 +83,11 @@ class AiResultValidatorTest {
     }
 
     @Test
-    @DisplayName("사실 위반 - 모르는 항목·같은 항목 두 번·값 없는 확인·이유 없는 미확인·칸 길이 초과")
+    @DisplayName("사실 위반 - 빈 항목·모르는 항목·같은 항목 두 번·값 없는 확인·이유 없는 미확인·칸 길이 초과")
     void factShape() {
+        assertThat(AiResultValidator.violation(REQUEST, result(Arrays.asList(
+                fact("symptom", "A", "CUSTOMER", "CONFIRMED", null, CUSTOMER_MSG, null), null))))
+                .hasValue("facts[1]");
         assertThat(factViolation(fact("address", "서울", "CUSTOMER", "CONFIRMED", null, CUSTOMER_MSG, null)))
                 .hasValue("facts[0].fieldKey");
         assertThat(AiResultValidator.violation(REQUEST, result(List.of(

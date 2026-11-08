@@ -86,6 +86,10 @@ final class AiResultValidator {
         for (int i = 0; i < facts.size(); i++) {
             Fact fact = facts.get(i);
             String at = "facts[" + i + "]";
+            // "facts":[null]도 출력 오류로 - 예외로 빠지면 실패 기록·재시도·사장님 확인을 건너뜀 (CodeRabbit 리뷰)
+            if (fact == null) {
+                return Optional.of(at);
+            }
             Optional<InquiryFieldKey> key = InquiryFieldKey.fromKey(fact.fieldKey());
             if (key.isEmpty() || !seen.add(fact.fieldKey())) {
                 return Optional.of(at + ".fieldKey");
