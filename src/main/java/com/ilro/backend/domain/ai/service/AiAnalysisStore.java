@@ -30,6 +30,8 @@ import com.ilro.backend.global.common.util.KstTime;
 import com.ilro.backend.infra.ai.AiCallResult;
 import com.ilro.backend.infra.ai.AnalyzeRequest;
 import com.ilro.backend.infra.ai.AnalyzeResult;
+import com.ilro.backend.infra.ai.AnalyzeResult.Candidate;
+import com.ilro.backend.infra.ai.AnalyzeResult.Conflict;
 import com.ilro.backend.infra.ai.AnalyzeResult.Evidence;
 import com.ilro.backend.infra.ai.AnalyzeResult.Fact;
 import lombok.RequiredArgsConstructor;
@@ -158,6 +160,7 @@ public class AiAnalysisStore {
         int versionBefore = inquiry.getVersion();
         AiDecision decision = decisionRepository.save(decision(inquiry, snapshot, call, AiDecisionStatus.SUCCESS));
         applyFacts(inquiry, decision, result.facts());
+        applyConflicts(inquiry, decision, result);
         applyWorkCategory(inquiry, result.workCategory());
         // 고객 화면은 메시지 가져오기로 받으므로 저장되면 전달 완료
         Message reply = Message.builder()
@@ -289,6 +292,57 @@ public class AiAnalysisStore {
                             : messageRepository.getReferenceById(evidence.messageId()))
                     .aiDecision(decision)
                     .build());
+        }
+        if (rows.isEmpty()) {
+            return;
+        }
+        fieldRepository.retireCurrent(inquiry.getId(), rows.stream().map(InquiryField::getFieldKey).toList());
+        fieldRepository.saveAll(rows);
+        for (InquiryField row : rows) {
+            inquiry.applyField(InquiryFieldKey.fromKey(row.getFieldKey()).orElseThrow(), row.getFieldValue());
+        }
+    }
+
+    // 같은 항목의 서로 다른 값 (명세 6.3) - 그 항목을 미확인(CONFLICT)으로 두고 이전 값은 이력(is_current=false)으로
+    // 값·근거는 가장 최근 고객 설명·사진 (후보 전체는 output_raw). facts에 같은 항목이 있으면 facts를 따름
+    // 이 판단을 남김 - 다음 답에서 AI가 확인하면 확인됨으로 바뀜 (그 전엔 AI가 보완 질문, 한도가 차면 사장님 확인)
+    // 사장님이 정할 값(사장님 값·그 값과 고객 값의 충돌)은 facts처럼 덮어쓰지 않음 (명세 6.4)
+    //   - 고객이 다르게 말한 내용은 이 판단의 conflicts(사장님 상세의 AI 요약)로 사장님이 봄
+    private void applyConflicts(Inquiry inquiry, AiDecision decision, AnalyzeResult result) {
+        if (result.conflicts() == null || result.conflicts().isEmpty()) {
+            return;
+        }
+        Set<String> factKeys = result.facts() == null ? Set.of()
+                : result.facts().stream().map(Fact::fieldKey).collect(Collectors.toSet());
+        Map<String, InquiryField> current = fieldRepository.findCurrent(inquiry.getId()).stream()
+                .collect(Collectors.toMap(InquiryField::getFieldKey, Function.identity()));
+        List<InquiryField> rows = new ArrayList<>();
+        for (Conflict conflict : result.conflicts()) {
+            InquiryField before = current.get(conflict.fieldKey());
+            if (factKeys.contains(conflict.fieldKey()) || (before != null && before.isOwnerDecision())) {
+                continue;
+            }
+            // 검사(AiResultValidator)에서 근거 있는 새 후보가 있는 것만 통과
+            Candidate latest = conflict.latestObserved().orElseThrow();
+            if (before != null && before.getStatus() == InquiryFieldStatus.UNCONFIRMED
+                    && InquiryField.CONFLICT.equals(before.getUnconfirmedReason())
+                    && Objects.equals(before.getFieldValue(), latest.value())) {
+                continue;
+            }
+            Evidence evidence = latest.evidence();
+            InquiryField row = InquiryField.builder()
+                    .inquiry(inquiry)
+                    .fieldKey(conflict.fieldKey())
+                    .fieldValue(latest.value())
+                    .source(InquiryFieldSource.valueOf(latest.source()))
+                    .status(InquiryFieldStatus.UNCONFIRMED)
+                    .unconfirmedReason(InquiryField.CONFLICT)
+                    .photo(evidence.photoId() == null ? null : photoRepository.getReferenceById(evidence.photoId()))
+                    .message(evidence.messageId() == null ? null
+                            : messageRepository.getReferenceById(evidence.messageId()))
+                    .aiDecision(decision)
+                    .build();
+            rows.add(row);
         }
         if (rows.isEmpty()) {
             return;

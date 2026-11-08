@@ -23,6 +23,8 @@ public enum InquiryErrorCode implements ErrorCode {
     INQUIRY_CLOSED(HttpStatus.CONFLICT, "INQUIRY_CLOSED", "종료된 상담이에요"),
     // result: currentVersion
     INQUIRY_VERSION_CONFLICT(HttpStatus.CONFLICT, "INQUIRY_VERSION_CONFLICT", "다른 곳에서 접수 정보가 먼저 바뀌었어요. 최신 내용을 확인해 주세요"),
+    // 사장님이 고친 방문정보를 고객이 다른 값으로 저장 - 바꿀 내용은 대화로 (B-14 사장님 수정 보호)
+    VISIT_INFO_OWNER_CONFIRMED(HttpStatus.CONFLICT, "VISIT_INFO_OWNER_CONFIRMED", "사장님이 확인한 방문 정보예요. 바꿀 내용은 대화로 알려 주세요"),
     // result: reservationId - 확정 예약의 주소·작업에 영향을 주는 수정은 예약 변경 절차로
     RESERVATION_CHANGE_REQUIRED(HttpStatus.UNPROCESSABLE_CONTENT, "RESERVATION_CHANGE_REQUIRED", "예약된 방문에 영향을 주는 내용은 예약 변경으로 요청해 주세요"),
     // 직접 응대를 시작하기 전에 사장님 답변

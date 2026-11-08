@@ -1,6 +1,7 @@
 package com.ilro.backend.domain.inquiry.service;
 
 import com.ilro.backend.domain.ai.service.AiAnalysisRequested;
+import com.ilro.backend.domain.auth.service.AuthTokenService;
 import com.ilro.backend.domain.inquiry.dto.CloseInquiryResponse;
 import com.ilro.backend.domain.inquiry.dto.HandlerChangeResponse;
 import com.ilro.backend.domain.inquiry.dto.MessagesResponse.MessageItem;
@@ -51,6 +52,7 @@ public class OwnerHandlingService {
     private final InquiryFieldService fieldService;
     private final ReservationRepository reservationRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuthTokenService authTokenService;
     private final Clock clock;
 
     // created: 새로 저장했으면 true(201), 같은 clientMsgId 재전송이면 false(200)
@@ -147,6 +149,8 @@ public class OwnerHandlingService {
     }
 
     // 문의 종료 (B-16) - 예약은 취소하지 않음, 진행 중 상담·회신 요청은 끝냄. 이미 종료됐으면 그대로 200
+    // 고객 상담 토큰은 모두 철회 (명세 1.5) - 종료 뒤 고객 기기에서 방문정보·대화를 더 읽지 못함 (401)
+    // 다시 종료해도 철회는 다시 함 (이전에 남은 토큰 정리)
     @Transactional
     public CloseInquiryResponse close(AuthPrincipal principal, Long inquiryId) {
         Inquiry inquiry = inquiryAccess.lockOwned(principal, inquiryId);
@@ -157,6 +161,7 @@ public class OwnerHandlingService {
             inquiryAccess.bumpVersion(inquiry, versionBefore);
             AccessLog.record(principal, "UPDATE", "inquiry.status", inquiryId);
         }
+        authTokenService.revokeInquiryTokens(inquiry.getId());
         Long reservationId = reservationRepository
                 .findByInquiryIdAndStatusNot(inquiry.getId(), ReservationStatus.CANCELED)
                 .map(Reservation::getId)

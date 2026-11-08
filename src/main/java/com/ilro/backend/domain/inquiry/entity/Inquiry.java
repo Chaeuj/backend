@@ -123,6 +123,11 @@ public class Inquiry extends BaseTimeEntity {
     // 고객 전화번호 인증 시각, null이면 예약 확정 불가
     private Instant phoneVerifiedAt;
 
+    // 방문정보를 마지막으로 정한 쪽 (V3) - OWNER면 고객이 다른 값으로 바꾸지 못함, 기록 없으면 null
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private VisitInfoSource visitInfoSource;
+
     @Builder
     private Inquiry(Owner owner, Customer customer) {
         this.owner = owner;
@@ -178,7 +183,7 @@ public class Inquiry extends BaseTimeEntity {
 
     // 고객 방문정보 (C-06) - 연락처를 다른 번호로 바꾸면 그 번호로 다시 인증해야 예약 확정 가능 (명세 1.5)
     public void updateVisitInfo(Customer customer, String address, String addressDetail, BigDecimal lat,
-                                BigDecimal lng, String accessNote) {
+                                BigDecimal lng, String accessNote, VisitInfoSource source) {
         if (this.customer == null || !this.customer.getPhone().equals(customer.getPhone())) {
             this.phoneVerifiedAt = null;
         }
@@ -188,6 +193,7 @@ public class Inquiry extends BaseTimeEntity {
         this.lat = lat;
         this.lng = lng;
         this.accessNote = accessNote;
+        this.visitInfoSource = source;
     }
 
     public void changeWorkType(OwnerWorkType workType) {

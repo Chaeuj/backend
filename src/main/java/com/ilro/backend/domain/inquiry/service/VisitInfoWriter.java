@@ -3,6 +3,7 @@ package com.ilro.backend.domain.inquiry.service;
 import com.ilro.backend.domain.customer.entity.Customer;
 import com.ilro.backend.domain.customer.repository.CustomerRepository;
 import com.ilro.backend.domain.inquiry.entity.Inquiry;
+import com.ilro.backend.domain.inquiry.entity.VisitInfoSource;
 import com.ilro.backend.domain.inquiry.exception.InquiryErrorCode;
 import com.ilro.backend.domain.owner.entity.OwnerWorkType;
 import com.ilro.backend.domain.owner.entity.WorkCategory;
@@ -53,10 +54,11 @@ public class VisitInfoWriter {
 
     // phone은 mobilePhone으로 맞춘 번호
     // 고객은 업체별로 번호 하나 - 같은 번호면 이전 문의의 고객과 이어짐
-    // trustedName: 사장님이 고친 이름은 그대로 저장. 고객이 보낸 이름은 번호 인증 전이면 이 문의만 쓰는 고객일 때만
+    // byOwner: 사장님이 고친 이름은 그대로 저장. 고객이 보낸 이름은 번호 인증 전이면 이 문의만 쓰는 고객일 때만
     //   (남의 번호를 넣어 기존 고객 이름을 바꾸지 못하게)
+    // 사장님이 고친 방문정보는 고객이 다른 값으로 바꾸지 못함 (409, 바꿀 내용은 대화로) - 같은 값을 다시 보내면 그대로 200
     // 바뀐 내용이 있으면 true - 그대로면 부른 쪽이 version·AI 입력 순번을 올리지 않음
-    public boolean write(Inquiry inquiry, Input input, boolean trustedName) {
+    public boolean write(Inquiry inquiry, Input input, boolean byOwner) {
         OwnerWorkType workType = input.workCategory() == null
                 ? inquiry.getWorkType()
                 : findOfferedWorkType(inquiry, input.workCategory(), input.fieldPrefix());
@@ -81,13 +83,18 @@ public class VisitInfoWriter {
                 || !Objects.equals(inquiry.getAccessNote(), accessNote)
                 || !Objects.equals(idOf(inquiry.getWorkType()), idOf(workType));
         String name = input.name().strip();
-        if ((trustedName || phoneVerified || customerRepository.isUsedOnlyBy(customer.getId(), inquiry.getId()))
-                && !name.equals(customer.getName())) {
+        boolean renames = (byOwner || phoneVerified || customerRepository.isUsedOnlyBy(customer.getId(), inquiry.getId()))
+                && !name.equals(customer.getName());
+        if ((changed || renames) && !byOwner && inquiry.getVisitInfoSource() == VisitInfoSource.OWNER) {
+            throw new BusinessException(InquiryErrorCode.VISIT_INFO_OWNER_CONFIRMED);
+        }
+        if (renames) {
             customer.changeName(name);
             changed = true;
         }
         if (changed) {
-            inquiry.updateVisitInfo(customer, address, addressDetail, lat, lng, accessNote);
+            inquiry.updateVisitInfo(customer, address, addressDetail, lat, lng, accessNote,
+                    byOwner ? VisitInfoSource.OWNER : VisitInfoSource.CUSTOMER);
             inquiry.changeWorkType(workType);
         }
         return changed;

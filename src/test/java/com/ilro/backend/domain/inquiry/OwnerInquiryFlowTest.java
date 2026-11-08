@@ -490,6 +490,43 @@ class OwnerInquiryFlowTest {
                 .andExpect(jsonPath("$.code").value("INQUIRY_CLOSED"));
     }
 
+    @Test
+    @DisplayName("사장님이 고친 방문정보 - 고객이 같은 값을 다시 보내면 200, 다른 값은 409이고 사장님 값 그대로")
+    void ownerVisitInfoProtected() throws Exception {
+        Session session = startInquiry();
+        putAs(session.token(), session.path("/visit-info"), visitInfo(version(session), "김고객", "010-2222-3333"))
+                .andExpect(status().isOk());
+        assertThat(visitInfoSource(session)).isEqualTo("CUSTOMER");
+        // 사장님이 출입 안내를 지움
+        patchAs(ownerToken, session.ownerPath(""), ownerVisit(version(session), "김고객", "010-2222-3333",
+                "경기 고양시 덕양구 화정로 1", "REPAIR"))
+                .andExpect(status().isOk());
+        assertThat(visitInfoSource(session)).isEqualTo("OWNER");
+
+        // 화면이 받은 값 그대로 다시 저장 - 바뀐 게 없으니 그대로
+        int before = version(session);
+        String same = """
+                {"version":%d,"name":"김고객","phone":"010-2222-3333","address":"경기 고양시 덕양구 화정로 1",
+                 "addressDetail":"101동 202호","lat":37.634,"lng":126.832,"accessNote":null,
+                 "workCategory":"REPAIR"}""".formatted(before);
+        putAs(session.token(), session.path("/visit-info"), same).andExpect(status().isOk());
+        assertThat(version(session)).isEqualTo(before);
+
+        // 다른 값 → 409, 사장님 값 그대로
+        putAs(session.token(), session.path("/visit-info"), visitInfo(before, "김고객", "010-2222-3333"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("VISIT_INFO_OWNER_CONFIRMED"));
+        assertThat(jdbc.queryForMap("SELECT access_note, version FROM inquiry WHERE id = ?", session.inquiryId()))
+                .containsEntry("access_note", null)
+                .containsEntry("version", before);
+
+        // 사장님은 계속 고칠 수 있음
+        patchAs(ownerToken, session.ownerPath(""), ownerVisit(before, "김고객", "010-2222-3333",
+                "서울 마포구 월드컵로 1", "REPAIR"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.visitInfo.address").value("서울 마포구 월드컵로 1"));
+    }
+
     // ---------- BE-08 응대 전환·사람 응대 요청 ----------
 
     @Test
@@ -684,11 +721,18 @@ class OwnerInquiryFlowTest {
     }
 
     @Test
-    @DisplayName("문의 종료 - 예약은 그대로(reservationKept), 진행 중 요청은 끝냄, 그 뒤 쓰기는 409, 다시 종료는 200")
+    @DisplayName("문의 종료 - 예약은 그대로(reservationKept), 진행 중 요청은 끝냄, 고객 토큰 철회(401), 사장님 쓰기는 409, "
+            + "다시 종료는 200")
     void close() throws Exception {
         Session session = startInquiry();
         postAs(session.token(), session.path("/callback-requests"), callback("김고객", "010-9876-5432"))
                 .andExpect(status().isCreated());
+        // 같은 문의를 다른 기기에서도 연 고객 토큰
+        String otherDevice = "inq_" + UUID.randomUUID();
+        jdbc.update("INSERT INTO auth_token (token_hash, token_type, inquiry_id, expires_at) "
+                + "VALUES (encode(sha256(convert_to(?, 'UTF8')), 'hex'), 'INQUIRY', ?, CURRENT_TIMESTAMP + interval '1 hour')",
+                otherDevice, session.inquiryId());
+        getAs(otherDevice, session.path("")).andExpect(status().isOk());
         long reservationId = reservation(session.inquiryId(), "CONFIRMED", at(LocalDate.now(KST).plusDays(1), 10));
         int before = version(session);
 
@@ -705,11 +749,16 @@ class OwnerInquiryFlowTest {
         postAs(ownerToken, session.ownerPath("/close"), "")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.version").value(before + 1));
-        postAs(session.token(), session.path("/messages"), customerMessage("c-1", "안녕하세요"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("INQUIRY_CLOSED"));
-        postAs(session.token(), session.path("/handoff-requests"), "")
-                .andExpect(status().isConflict());
+        for (String token : new String[]{session.token(), otherDevice}) {
+            getAs(token, session.path("")).andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+            postAs(token, session.path("/messages"), customerMessage("c-1", "안녕하세요"))
+                    .andExpect(status().isUnauthorized());
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM auth_token WHERE inquiry_id = ? AND revoked_at IS NULL",
+                Integer.class, session.inquiryId())).isZero();
+        // 사장님은 종료된 문의를 계속 보고, 쓰기는 409
+        getAs(ownerToken, session.ownerPath("")).andExpect(status().isOk());
         for (String action : new String[]{"/takeover", "/resume-ai"}) {
             postAs(ownerToken, session.ownerPath(action), "")
                     .andExpect(status().isConflict())
@@ -887,6 +936,11 @@ class OwnerInquiryFlowTest {
 
     private long aiInputSeq(Session session) {
         return jdbc.queryForObject("SELECT ai_input_seq FROM inquiry WHERE id = ?", Long.class, session.inquiryId());
+    }
+
+    private String visitInfoSource(Session session) {
+        return jdbc.queryForObject("SELECT visit_info_source FROM inquiry WHERE id = ?", String.class,
+                session.inquiryId());
     }
 
     private Map<String, Object> inquiry(Session session) {
