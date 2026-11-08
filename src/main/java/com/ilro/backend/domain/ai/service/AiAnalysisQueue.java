@@ -85,22 +85,36 @@ public class AiAnalysisQueue {
     }
 
     private void runLoop(Long inquiryId) {
-        boolean again;
-        do {
-            try {
-                analysisService.analyze(inquiryId);
-            } catch (RuntimeException e) {
-                // 답이 없는 메시지는 sweep이 다시 잡음
-                log.error("AI 분석 작업 실패 inquiryId={}", inquiryId, e);
+        boolean again = true;
+        try {
+            while (again) {
+                try {
+                    analysisService.analyze(inquiryId);
+                } catch (RuntimeException e) {
+                    // 답이 없는 메시지는 sweep이 다시 잡음
+                    log.error("AI 분석 작업 실패 inquiryId={}", inquiryId, e);
+                }
+                again = finishRound(inquiryId);
             }
-            synchronized (running) {
-                again = Boolean.TRUE.equals(running.get(inquiryId));
-                if (again) {
-                    running.put(inquiryId, false);
-                } else {
+        } finally {
+            // Error(메모리 부족 등)로 빠져나가도 표시를 지움 - 남으면 이 문의는 재시작 전까지 다시 분석되지 않음
+            if (again) {
+                synchronized (running) {
                     running.remove(inquiryId);
                 }
             }
-        } while (again);
+        }
+    }
+
+    // 이번 회차를 끝냄 - 도는 동안 요청이 또 왔으면 한 번 더(true), 아니면 표시를 지움
+    private boolean finishRound(Long inquiryId) {
+        synchronized (running) {
+            if (Boolean.TRUE.equals(running.get(inquiryId))) {
+                running.put(inquiryId, false);
+                return true;
+            }
+            running.remove(inquiryId);
+            return false;
+        }
     }
 }
